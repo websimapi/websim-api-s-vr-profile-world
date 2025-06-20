@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>@api's VR Profile World</title>
+    <meta name="description" content="Explore @api's projects in an infinite 3D VR world">
+    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
+    <script src="https://mixedreality.mozilla.org/ammo.js/builds/ammo.wasm.js"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Arial', sans-serif;
+        }
+        
+        #ui-overlay {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            max-width: 300px;
+        }
+        
+        #project-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2000;
+            background: rgba(0, 0, 0, 0.95);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 90%;
+            display: none;
+            border: 2px solid #00ffff;
+        }
+        
+        #project-modal button {
+            background: #00ffff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 5px;
+            color: black;
+            font-weight: bold;
+        }
+        
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1500;
+            color: white;
+            font-size: 18px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-overlay">
+        <h3>@api's VR World</h3>
+        <p>🎮 Use controllers or WASD to move</p>
+        <p>🎯 Point and click to teleport</p>
+        <p>✋ Grab artifacts to view projects</p>
+        <p id="chunk-info">Chunk: 0,0</p>
+        <p id="project-count">Projects loaded: 0</p>
+    </div>
+    
+    <div id="loading">Loading @api's projects...</div>
+    
+    <div id="project-modal">
+        <h2 id="modal-title"></h2>
+        <p id="modal-description"></p>
+        <div id="modal-stats"></div>
+        <button onclick="openProject()">Open Project</button>
+        <button onclick="closeModal()">Close</button>
+    </div>
+
+    <a-scene 
+        background="color: #001122"
+        fog="type: exponential; color: #001122; density: 0.0025"
+        vr-mode-ui="enabled: true"
+        device-orientation-permission-ui="enabled: true"
+        loading-screen="enabled: false">
+        
+        <!-- Assets -->
+        <a-assets>
+            <a-mixin id="chunk-floor" 
+                geometry="primitive: plane; width: 50; height: 50" 
+                material="color: #112233; roughness: 0.8; metalness: 0.1">
+            </a-mixin>
+            
+            <a-mixin id="artifact-base"
+                geometry="primitive: box; width: 1; height: 1.5; depth: 1"
+                material="color: #00ffff; roughness: 0.3; metalness: 0.7; emissive: #004444"
+                animation__hover="property: rotation; to: 0 360 0; loop: true; dur: 10000">
+            </a-mixin>
+            
+            <a-mixin id="teleport-area"
+                geometry="primitive: cylinder; radius: 1; height: 0.1"
+                material="color: #00ff00; opacity: 0.7; transparent: true"
+                visible="false">
+            </a-mixin>
+        </a-assets>
+
+        <!-- Lighting -->
+        <a-light type="ambient" color="#404040" intensity="0.4"></a-light>
+        <a-light type="directional" color="#ffffff" intensity="0.8" position="10 20 10"></a-light>
+        <a-light type="point" color="#00ffff" intensity="0.5" position="0 5 0"></a-light>
+
+        <!-- VR Camera Rig -->
+        <a-entity id="rig" 
+            position="0 1.6 3"
+            movement-controls="fly: false; constrainToNavMesh: false"
+            wasd-controls="acceleration: 20"
+            look-controls="pointerLockEnabled: true">
+            
+            <!-- Camera -->
+            <a-camera id="camera"
+                cursor="rayOrigin: mouse; fuse: false"
+                raycaster="objects: .clickable; far: 50">
+            </a-camera>
+            
+            <!-- VR Controllers -->
+            <a-entity id="leftHand" 
+                hand-controls="hand: left; handModelStyle: lowPoly; color: #00ffff"
+                teleport-controls="cameraRig: #rig; teleportOrigin: #camera; button: trigger; curveShootingSpeed: 18; landingMaxAngle: 60"
+                visible="false">
+            </a-entity>
+            
+            <a-entity id="rightHand" 
+                hand-controls="hand: right; handModelStyle: lowPoly; color: #00ffff"
+                laser-controls="hand: right"
+                raycaster="objects: .clickable; far: 30"
+                visible="false">
+            </a-entity>
+        </a-entity>
+
+        <!-- World chunks container -->
+        <a-entity id="world"></a-entity>
+        
+        <!-- Skybox -->
+        <a-sky color="#000814" material="shader: gradient; topColor: #001122; bottomColor: #000408"></a-sky>
+    </a-scene>
+
+    <script>
+        // Global variables
+        let userProjects = [];
+        let loadedChunks = new Set();
+        let currentChunk = {x: 0, z: 0};
+        let selectedProject = null;
+        
+        // Chunk management
+        const CHUNK_SIZE = 50;
+        const RENDER_DISTANCE = 2;
+        
+        class VRProfileWorld {
+            constructor() {
+                this.camera = document.querySelector('#camera');
+                this.world = document.querySelector('#world');
+                this.loadingEl = document.querySelector('#loading');
+                this.init();
+            }
+            
+            async init() {
+                try {
+                    await this.loadUserProjects();
+                    this.setupEventListeners();
+                    this.generateInitialChunks();
+                    this.startWorldLoop();
+                    this.loadingEl.style.display = 'none';
+                } catch (error) {
+                    console.error('Failed to initialize VR world:', error);
+                    this.loadingEl.textContent = 'Failed to load. Using demo mode.';
+                    this.createDemoProjects();
+                    this.generateInitialChunks();
+                    this.startWorldLoop();
+                }
+            }
+            
+            async loadUserProjects() {
+                try {
+                    const creator = await window.websim.getCreator();
+                    if (!creator || creator.username !== 'api') {
+                        throw new Error('Creator not found or not @api');
+                    }
+                    
+                    const response = await fetch(`/api/v1/users/api/projects?posted=true&has_site=true&limit=50`);
+                    if (!response.ok) throw new Error('Failed to fetch projects');
+                    
+                    const data = await response.json();
+                    userProjects = data.projects.data.map(item => ({
+                        id: item.project.id,
+                        title: item.project.title || 'Untitled Project',
+                        description: item.project.description || 'No description available',
+                        stats: item.project.stats,
+                        site: item.site,
+                        updated_at: item.project.updated_at
+                    }));
+                    
+                    document.querySelector('#project-count').textContent = `Projects loaded: ${userProjects.length}`;
+                } catch (error) {
+                    console.error('Error loading projects:', error);
+                    this.createDemoProjects();
+                }
+            }
+            
+            createDemoProjects() {
+                userProjects = [
+                    {
+                        id: 'demo1',
+                        title: '3D Solar System',
+                        description: 'Interactive 3D solar system with realistic planetary motion',
+                        stats: {views: 1250, likes: 89, comments: 23}
+                    },
+                    {
+                        id: 'demo2', 
+                        title: 'Neural Network Visualizer',
+                        description: 'Real-time visualization of neural network training',
+                        stats: {views: 890, likes: 67, comments: 15}
+                    },
+                    {
+                        id: 'demo3',
+                        title: 'Quantum Physics Simulator',
+                        description: 'Interactive quantum mechanics visualization tool',
+                        stats: {views: 2100, likes: 156, comments: 42}
+                    }
+                ];
+            }
+            
+            setupEventListeners() {
+                // VR controller detection
+                this.camera.addEventListener('enter-vr', () => {
+                    document.querySelector('#leftHand').setAttribute('visible', true);
+                    document.querySelector('#rightHand').setAttribute('visible', true);
+                });
+                
+                this.camera.addEventListener('exit-vr', () => {
+                    document.querySelector('#leftHand').setAttribute('visible', false);
+                    document.querySelector('#rightHand').setAttribute('visible', false);
+                });
+                
+                // Artifact interaction
+                document.addEventListener('click', (event) => {
+                    if (event.target.classList.contains('artifact')) {
+                        this.selectArtifact(event.target);
+                    }
+                });
+            }
+            
+            generateInitialChunks() {
+                for (let x = -RENDER_DISTANCE; x <= RENDER_DISTANCE; x++) {
+                    for (let z = -RENDER_DISTANCE; z <= RENDER_DISTANCE; z++) {
+                        this.generateChunk(x, z);
+                    }
+                }
+            }
+            
+            generateChunk(chunkX, chunkZ) {
+                const chunkKey = `${chunkX},${chunkZ}`;
+                if (loadedChunks.has(chunkKey)) return;
+                
+                loadedChunks.add(chunkKey);
+                
+                const chunkEntity = document.createElement('a-entity');
+                chunkEntity.setAttribute('id', `chunk-${chunkKey}`);
+                chunkEntity.setAttribute('position', `${chunkX * CHUNK_SIZE} 0 ${chunkZ * CHUNK_SIZE}`);
+                
+                // Create floor
+                const floor = document.createElement('a-plane');
+                floor.setAttribute('mixin', 'chunk-floor');
+                floor.setAttribute('rotation', '-90 0 0');
+                floor.setAttribute('position', '0 -0.1 0');
+                chunkEntity.appendChild(floor);
+                
+                // Add artifacts (projects)
+                this.populateChunkWithArtifacts(chunkEntity, chunkX, chunkZ);
+                
+                this.world.appendChild(chunkEntity);
+            }
+            
+            populateChunkWithArtifacts(chunkEntity, chunkX, chunkZ) {
+                if (userProjects.length === 0) return;
+                
+                const artifactCount = Math.floor(Math.random() * 5) + 3; // 3-7 artifacts per chunk
+                
+                for (let i = 0; i < artifactCount; i++) {
+                    const project = userProjects[Math.floor(Math.random() * userProjects.length)];
+                    
+                    const artifact = document.createElement('a-box');
+                    artifact.setAttribute('class', 'artifact clickable');
+                    artifact.setAttribute('width', '1');
+                    artifact.setAttribute('height', '1.5');
+                    artifact.setAttribute('depth', '1');
+                    artifact.setAttribute('material', 'color: #00ffff; roughness: 0.3; metalness: 0.7; emissive: #004444');
+                    artifact.setAttribute('animation__hover', 'property: rotation; to: 0 360 0; loop: true; dur: 10000');
+                    
+                    // Random position within chunk
+                    const x = (Math.random() - 0.5) * 40;
+                    const z = (Math.random() - 0.5) * 40;
+                    const y = 0.75;
+                    artifact.setAttribute('position', `${x} ${y} ${z}`);
+                    
+                    // Add floating animation
+                    artifact.setAttribute('animation__float', 'property: position; to: ' + x + ' ' + (y + 0.5) + ' ' + z + '; dir: alternate; loop: true; dur: 3000; easing: easeInOutSine');
+                    
+                    // Store project data
+                    artifact.projectData = project;
+                    
+                    // Add text label
+                    const label = document.createElement('a-text');
+                    label.setAttribute('value', project.title);
+                    label.setAttribute('position', '0 1 0');
+                    label.setAttribute('align', 'center');
+                    label.setAttribute('color', '#ffffff');
+                    label.setAttribute('scale', '2 2 2');
+                    artifact.appendChild(label);
+                    
+                    chunkEntity.appendChild(artifact);
+                }
+            }
+            
+            selectArtifact(artifactEl) {
+                if (!artifactEl.projectData) return;
+                
+                selectedProject = artifactEl.projectData;
+                
+                document.querySelector('#modal-title').textContent = selectedProject.title;
+                document.querySelector('#modal-description').textContent = selectedProject.description;
+                
+                const statsEl = document.querySelector('#modal-stats');
+                if (selectedProject.stats) {
+                    statsEl.innerHTML = `
+                        <p>👁️ Views: ${selectedProject.stats.views}</p>
+                        <p>❤️ Likes: ${selectedProject.stats.likes}</p>
+                        <p>💬 Comments: ${selectedProject.stats.comments}</p>
+                    `;
+                } else {
+                    statsEl.innerHTML = '<p>Demo project - no stats available</p>';
+                }
+                
+                document.querySelector('#project-modal').style.display = 'block';
+                
+                // Highlight selected artifact
+                artifactEl.setAttribute('material', 'color: #ffff00; emissive: #444400');
+                setTimeout(() => {
+                    artifactEl.setAttribute('material', 'color: #00ffff; emissive: #004444');
+                }, 1000);
+            }
+            
+            startWorldLoop() {
+                setInterval(() => {
+                    this.updateChunks();
+                }, 1000);
+            }
+            
+            updateChunks() {
+                const cameraPos = this.camera.getAttribute('position');
+                const newChunkX = Math.floor(cameraPos.x / CHUNK_SIZE);
+                const newChunkZ = Math.floor(cameraPos.z / CHUNK_SIZE);
+                
+                if (newChunkX !== currentChunk.x || newChunkZ !== currentChunk.z) {
+                    currentChunk = {x: newChunkX, z: newChunkZ};
+                    document.querySelector('#chunk-info').textContent = `Chunk: ${newChunkX},${newChunkZ}`;
+                    
+                    // Generate new chunks around camera
+                    for (let x = newChunkX - RENDER_DISTANCE; x <= newChunkX + RENDER_DISTANCE; x++) {
+                        for (let z = newChunkZ - RENDER_DISTANCE; z <= newChunkZ + RENDER_DISTANCE; z++) {
+                            this.generateChunk(x, z);
+                        }
+                    }
+                    
+                    // Remove distant chunks
+                    this.cullDistantChunks(newChunkX, newChunkZ);
+                }
+            }
+            
+            cullDistantChunks(centerX, centerZ) {
+                const chunksToRemove = [];
+                
+                loadedChunks.forEach(chunkKey => {
+                    const [x, z] = chunkKey.split(',').map(Number);
+                    const distance = Math.max(Math.abs(x - centerX), Math.abs(z - centerZ));
+                    
+                    if (distance > RENDER_DISTANCE + 1) {
+                        chunksToRemove.push({key: chunkKey, x, z});
+                    }
+                });
+                
+                chunksToRemove.forEach(chunk => {
+                    loadedChunks.delete(chunk.key);
+                    const chunkEl = document.querySelector(`#chunk-${chunk.key}`);
+                    if (chunkEl) {
+                        chunkEl.remove();
+                    }
+                });
+            }
+        }
+        
+        // Global functions for modal
+        function openProject() {
+            if (selectedProject && selectedProject.id !== 'demo1' && selectedProject.id !== 'demo2' && selectedProject.id !== 'demo3') {
+                window.open(`https://websim.com/p/${selectedProject.id}`, '_blank');
+            } else {
+                alert('This is a demo project. Real projects will open in @api\'s actual profile.');
+            }
+            closeModal();
+        }
+        
+        function closeModal() {
+            document.querySelector('#project-modal').style.display = 'none';
+            selectedProject = null;
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new VRProfileWorld();
+        });
+        
+        // Handle VR mode changes
+        document.querySelector('a-scene').addEventListener('enter-vr', () => {
+            document.querySelector('#ui-overlay').style.display = 'none';
+        });
+        
+        document.querySelector('a-scene').addEventListener('exit-vr', () => {
+            document.querySelector('#ui-overlay').style.display = 'block';
+        });
+    </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+
