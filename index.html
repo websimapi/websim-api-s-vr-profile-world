@@ -153,7 +153,7 @@
         let loadedChunks = new Set();
         let currentChunk = {x: 0, z: 0};
         let selectedProject = null;
-        let vrSupported = false;
+        let scene;
         
         // Chunk management
         const CHUNK_SIZE = 50;
@@ -165,142 +165,90 @@
                 this.world = document.querySelector('#world');
                 this.loadingEl = document.querySelector('#loading');
                 this.rig = document.querySelector('#rig');
+                this.scene = document.querySelector('a-scene');
                 this.init();
             }
             
             async init() {
+                console.log('Initializing VR Profile World...');
+                
                 try {
                     // Wait for A-Frame to be ready
-                    await this.waitForAFrame();
+                    await this.waitForScene();
                     
-                    // Setup basic controls first
-                    this.setupBasicControls();
-                    
+                    // Load projects first
                     await this.loadUserProjects();
+                    
+                    // Setup basic interactions
                     this.setupEventListeners();
+                    
+                    // Generate world
                     this.generateInitialChunks();
+                    
+                    // Setup movement controls
+                    this.setupMovementControls();
+                    
+                    // Start update loop
                     this.startWorldLoop();
+                    
+                    // Hide loading screen
                     this.loadingEl.style.display = 'none';
                     
-                    // Setup VR controls after everything else is ready
-                    this.setupVRControls();
+                    console.log('VR Profile World initialized successfully');
+                    
                 } catch (error) {
                     console.error('Failed to initialize VR world:', error);
-                    this.loadingEl.textContent = 'Failed to load. Using demo mode.';
-                    this.createDemoProjects();
-                    this.setupBasicControls();
-                    this.generateInitialChunks();
-                    this.startWorldLoop();
-                    setTimeout(() => this.loadingEl.style.display = 'none', 1000);
+                    this.handleInitError();
                 }
             }
             
-            waitForAFrame() {
+            waitForScene() {
                 return new Promise((resolve) => {
-                    if (AFRAME.components) {
+                    if (this.scene.hasLoaded) {
                         resolve();
                     } else {
-                        document.addEventListener('DOMContentLoaded', resolve);
+                        this.scene.addEventListener('loaded', resolve);
                     }
                 });
             }
             
-            setupBasicControls() {
-                try {
-                    // Add basic WASD controls
-                    this.rig.setAttribute('wasd-controls', {
-                        acceleration: 20,
-                        fly: false
-                    });
+            setupMovementControls() {
+                // Simple WASD movement using direct position manipulation
+                document.addEventListener('keydown', (event) => {
+                    const position = this.rig.getAttribute('position');
+                    const rotation = this.camera.getAttribute('rotation');
+                    const speed = 0.5;
                     
-                    // Add look controls
-                    this.camera.setAttribute('look-controls', {
-                        pointerLockEnabled: true
-                    });
+                    // Convert rotation to radians for movement direction
+                    const yaw = (rotation.y * Math.PI) / 180;
                     
-                    // Add basic movement
-                    document.addEventListener('keydown', (event) => {
-                        const position = this.rig.getAttribute('position');
-                        const speed = 0.5;
-                        
-                        switch(event.key.toLowerCase()) {
-                            case 'w':
-                                position.z -= speed;
-                                break;
-                            case 's':
-                                position.z += speed;
-                                break;
-                            case 'a':
-                                position.x -= speed;
-                                break;
-                            case 'd':
-                                position.x += speed;
-                                break;
-                        }
-                        
-                        this.rig.setAttribute('position', position);
-                    });
-                } catch (error) {
-                    console.warn('Basic controls setup failed:', error);
-                }
-            }
-            
-            setupVRControls() {
-                try {
-                    // Check if VR components are available
-                    if (AFRAME.components['movement-controls']) {
-                        this.rig.setAttribute('movement-controls', {
-                            fly: false,
-                            constrainToNavMesh: false
-                        });
+                    switch(event.key.toLowerCase()) {
+                        case 'w':
+                            position.x -= Math.sin(yaw) * speed;
+                            position.z -= Math.cos(yaw) * speed;
+                            break;
+                        case 's':
+                            position.x += Math.sin(yaw) * speed;
+                            position.z += Math.cos(yaw) * speed;
+                            break;
+                        case 'a':
+                            position.x -= Math.cos(yaw) * speed;
+                            position.z += Math.sin(yaw) * speed;
+                            break;
+                        case 'd':
+                            position.x += Math.cos(yaw) * speed;
+                            position.z -= Math.sin(yaw) * speed;
+                            break;
                     }
                     
-                    // Setup hand controls if available
-                    const leftHand = document.querySelector('#leftHand');
-                    const rightHand = document.querySelector('#rightHand');
-                    
-                    if (AFRAME.components['hand-controls']) {
-                        leftHand.setAttribute('hand-controls', {
-                            hand: 'left',
-                            handModelStyle: 'lowPoly',
-                            color: '#00ffff'
-                        });
-                        
-                        rightHand.setAttribute('hand-controls', {
-                            hand: 'right', 
-                            handModelStyle: 'lowPoly',
-                            color: '#00ffff'
-                        });
-                    }
-                    
-                    // Setup teleport controls if available
-                    if (AFRAME.components['teleport-controls']) {
-                        leftHand.setAttribute('teleport-controls', {
-                            cameraRig: '#rig',
-                            teleportOrigin: '#camera',
-                            button: 'trigger',
-                            curveShootingSpeed: 18,
-                            landingMaxAngle: 60
-                        });
-                    }
-                    
-                    // Setup laser controls if available
-                    if (AFRAME.components['laser-controls']) {
-                        rightHand.setAttribute('laser-controls', {
-                            hand: 'right'
-                        });
-                        
-                        rightHand.setAttribute('raycaster', {
-                            objects: '.clickable',
-                            far: 30
-                        });
-                    }
-                    
-                    vrSupported = true;
-                } catch (error) {
-                    console.warn('VR controls setup failed, using basic controls only:', error);
-                    vrSupported = false;
-                }
+                    this.rig.setAttribute('position', position);
+                });
+                
+                // Add basic mouse look controls
+                this.camera.setAttribute('look-controls', {
+                    enabled: true,
+                    pointerLockEnabled: true
+                });
             }
             
             async loadUserProjects() {
@@ -324,6 +272,8 @@
                     }));
                     
                     document.querySelector('#project-count').textContent = `Projects loaded: ${userProjects.length}`;
+                    console.log(`Loaded ${userProjects.length} projects`);
+                    
                 } catch (error) {
                     console.error('Error loading projects:', error);
                     this.createDemoProjects();
@@ -349,32 +299,33 @@
                         title: 'Quantum Physics Simulator',
                         description: 'Interactive quantum mechanics visualization tool',
                         stats: {views: 2100, likes: 156, comments: 42}
+                    },
+                    {
+                        id: 'demo4',
+                        title: 'Fractal Explorer',
+                        description: 'Deep dive into mathematical fractals',
+                        stats: {views: 756, likes: 43, comments: 8}
+                    },
+                    {
+                        id: 'demo5',
+                        title: 'Physics Playground',
+                        description: 'Interactive physics simulation',
+                        stats: {views: 1450, likes: 92, comments: 28}
                     }
                 ];
+                document.querySelector('#project-count').textContent = `Projects loaded: ${userProjects.length} (Demo Mode)`;
             }
             
             setupEventListeners() {
-                // VR controller detection
-                if (vrSupported) {
-                    this.camera.addEventListener('enter-vr', () => {
-                        document.querySelector('#leftHand').setAttribute('visible', true);
-                        document.querySelector('#rightHand').setAttribute('visible', true);
-                    });
-                    
-                    this.camera.addEventListener('exit-vr', () => {
-                        document.querySelector('#leftHand').setAttribute('visible', false);
-                        document.querySelector('#rightHand').setAttribute('visible', false);
-                    });
-                }
-                
-                // Artifact interaction
-                document.addEventListener('click', (event) => {
-                    if (event.target.classList.contains('artifact')) {
-                        this.selectArtifact(event.target);
+                // Click interaction for artifacts
+                this.scene.addEventListener('click', (event) => {
+                    const target = event.target;
+                    if (target && target.classList.contains('artifact')) {
+                        this.selectArtifact(target);
                     }
                 });
                 
-                // Mouse click for desktop interaction
+                // Cursor interaction
                 this.camera.addEventListener('click', (event) => {
                     const intersectedEl = event.detail.intersectedEl;
                     if (intersectedEl && intersectedEl.classList.contains('artifact')) {
@@ -384,11 +335,13 @@
             }
             
             generateInitialChunks() {
+                console.log('Generating initial chunks...');
                 for (let x = -RENDER_DISTANCE; x <= RENDER_DISTANCE; x++) {
                     for (let z = -RENDER_DISTANCE; z <= RENDER_DISTANCE; z++) {
                         this.generateChunk(x, z);
                     }
                 }
+                console.log(`Generated ${(RENDER_DISTANCE * 2 + 1) ** 2} initial chunks`);
             }
             
             generateChunk(chunkX, chunkZ) {
@@ -403,9 +356,11 @@
                 
                 // Create floor
                 const floor = document.createElement('a-plane');
-                floor.setAttribute('mixin', 'chunk-floor');
+                floor.setAttribute('width', '50');
+                floor.setAttribute('height', '50');
                 floor.setAttribute('rotation', '-90 0 0');
                 floor.setAttribute('position', '0 -0.1 0');
+                floor.setAttribute('material', 'color: #112233; roughness: 0.8');
                 chunkEntity.appendChild(floor);
                 
                 // Add artifacts (projects)
@@ -428,7 +383,6 @@
                     artifact.setAttribute('height', '1.5');
                     artifact.setAttribute('depth', '1');
                     artifact.setAttribute('material', 'color: #00ffff; roughness: 0.3; metalness: 0.7; emissive: #004444');
-                    artifact.setAttribute('animation__hover', 'property: rotation; to: 0 360 0; loop: true; dur: 10000');
                     
                     // Random position within chunk
                     const x = (Math.random() - 0.5) * 40;
@@ -436,8 +390,8 @@
                     const y = 0.75;
                     artifact.setAttribute('position', `${x} ${y} ${z}`);
                     
-                    // Add floating animation
-                    artifact.setAttribute('animation__float', 'property: position; to: ' + x + ' ' + (y + 0.5) + ' ' + z + '; dir: alternate; loop: true; dur: 3000; easing: easeInOutSine');
+                    // Add rotation animation
+                    artifact.setAttribute('animation', 'property: rotation; to: 0 360 0; loop: true; dur: 10000');
                     
                     // Store project data
                     artifact.projectData = project;
@@ -448,7 +402,7 @@
                     label.setAttribute('position', '0 1 0');
                     label.setAttribute('align', 'center');
                     label.setAttribute('color', '#ffffff');
-                    label.setAttribute('scale', '2 2 2');
+                    label.setAttribute('scale', '1.5 1.5 1.5');
                     artifact.appendChild(label);
                     
                     chunkEntity.appendChild(artifact);
@@ -490,9 +444,9 @@
             }
             
             updateChunks() {
-                const cameraPos = this.camera.getAttribute('position');
-                const newChunkX = Math.floor(cameraPos.x / CHUNK_SIZE);
-                const newChunkZ = Math.floor(cameraPos.z / CHUNK_SIZE);
+                const rigPos = this.rig.getAttribute('position');
+                const newChunkX = Math.floor(rigPos.x / CHUNK_SIZE);
+                const newChunkZ = Math.floor(rigPos.z / CHUNK_SIZE);
                 
                 if (newChunkX !== currentChunk.x || newChunkZ !== currentChunk.z) {
                     currentChunk = {x: newChunkX, z: newChunkZ};
@@ -530,11 +484,22 @@
                     }
                 });
             }
+            
+            handleInitError() {
+                console.log('Falling back to demo mode...');
+                this.createDemoProjects();
+                this.setupEventListeners();
+                this.generateInitialChunks();
+                this.setupMovementControls();
+                this.startWorldLoop();
+                this.loadingEl.textContent = 'Loaded in Demo Mode';
+                setTimeout(() => this.loadingEl.style.display = 'none', 2000);
+            }
         }
         
         // Global functions for modal
         function openProject() {
-            if (selectedProject && selectedProject.id !== 'demo1' && selectedProject.id !== 'demo2' && selectedProject.id !== 'demo3') {
+            if (selectedProject && !selectedProject.id.startsWith('demo')) {
                 window.open(`https://websim.com/p/${selectedProject.id}`, '_blank');
             } else {
                 alert('This is a demo project. Real projects will open in @api\'s actual profile.');
@@ -547,12 +512,17 @@
             selectedProject = null;
         }
         
-        // Initialize when page loads
+        // Initialize when A-Frame is ready
         document.addEventListener('DOMContentLoaded', () => {
-            // Small delay to ensure A-Frame is fully loaded
-            setTimeout(() => {
+            // Wait for A-Frame scene to be ready
+            const scene = document.querySelector('a-scene');
+            if (scene.hasLoaded) {
                 new VRProfileWorld();
-            }, 500);
+            } else {
+                scene.addEventListener('loaded', () => {
+                    new VRProfileWorld();
+                });
+            }
         });
         
         // Handle VR mode changes
