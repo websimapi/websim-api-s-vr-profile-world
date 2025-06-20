@@ -5,7 +5,7 @@
     <title>@api's VR Profile World</title>
     <meta name="description" content="Explore @api's projects in an infinite 3D VR world">
     <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/supermedium/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
     <script src="https://mixedreality.mozilla.org/ammo.js/builds/ammo.wasm.js"></script>
     <style>
         body {
@@ -92,7 +92,8 @@
         fog="type: exponential; color: #001122; density: 0.0025"
         vr-mode-ui="enabled: true"
         device-orientation-permission-ui="enabled: true"
-        loading-screen="enabled: false">
+        loading-screen="enabled: false"
+        embedded>
         
         <!-- Assets -->
         <a-assets>
@@ -121,10 +122,7 @@
 
         <!-- VR Camera Rig -->
         <a-entity id="rig" 
-            position="0 1.6 3"
-            movement-controls="fly: false; constrainToNavMesh: false"
-            wasd-controls="acceleration: 20"
-            look-controls="pointerLockEnabled: true">
+            position="0 1.6 3">
             
             <!-- Camera -->
             <a-camera id="camera"
@@ -134,15 +132,10 @@
             
             <!-- VR Controllers -->
             <a-entity id="leftHand" 
-                hand-controls="hand: left; handModelStyle: lowPoly; color: #00ffff"
-                teleport-controls="cameraRig: #rig; teleportOrigin: #camera; button: trigger; curveShootingSpeed: 18; landingMaxAngle: 60"
                 visible="false">
             </a-entity>
             
             <a-entity id="rightHand" 
-                hand-controls="hand: right; handModelStyle: lowPoly; color: #00ffff"
-                laser-controls="hand: right"
-                raycaster="objects: .clickable; far: 30"
                 visible="false">
             </a-entity>
         </a-entity>
@@ -160,6 +153,7 @@
         let loadedChunks = new Set();
         let currentChunk = {x: 0, z: 0};
         let selectedProject = null;
+        let vrSupported = false;
         
         // Chunk management
         const CHUNK_SIZE = 50;
@@ -170,22 +164,142 @@
                 this.camera = document.querySelector('#camera');
                 this.world = document.querySelector('#world');
                 this.loadingEl = document.querySelector('#loading');
+                this.rig = document.querySelector('#rig');
                 this.init();
             }
             
             async init() {
                 try {
+                    // Wait for A-Frame to be ready
+                    await this.waitForAFrame();
+                    
+                    // Setup basic controls first
+                    this.setupBasicControls();
+                    
                     await this.loadUserProjects();
                     this.setupEventListeners();
                     this.generateInitialChunks();
                     this.startWorldLoop();
                     this.loadingEl.style.display = 'none';
+                    
+                    // Setup VR controls after everything else is ready
+                    this.setupVRControls();
                 } catch (error) {
                     console.error('Failed to initialize VR world:', error);
                     this.loadingEl.textContent = 'Failed to load. Using demo mode.';
                     this.createDemoProjects();
+                    this.setupBasicControls();
                     this.generateInitialChunks();
                     this.startWorldLoop();
+                    setTimeout(() => this.loadingEl.style.display = 'none', 1000);
+                }
+            }
+            
+            waitForAFrame() {
+                return new Promise((resolve) => {
+                    if (AFRAME.components) {
+                        resolve();
+                    } else {
+                        document.addEventListener('DOMContentLoaded', resolve);
+                    }
+                });
+            }
+            
+            setupBasicControls() {
+                try {
+                    // Add basic WASD controls
+                    this.rig.setAttribute('wasd-controls', {
+                        acceleration: 20,
+                        fly: false
+                    });
+                    
+                    // Add look controls
+                    this.camera.setAttribute('look-controls', {
+                        pointerLockEnabled: true
+                    });
+                    
+                    // Add basic movement
+                    document.addEventListener('keydown', (event) => {
+                        const position = this.rig.getAttribute('position');
+                        const speed = 0.5;
+                        
+                        switch(event.key.toLowerCase()) {
+                            case 'w':
+                                position.z -= speed;
+                                break;
+                            case 's':
+                                position.z += speed;
+                                break;
+                            case 'a':
+                                position.x -= speed;
+                                break;
+                            case 'd':
+                                position.x += speed;
+                                break;
+                        }
+                        
+                        this.rig.setAttribute('position', position);
+                    });
+                } catch (error) {
+                    console.warn('Basic controls setup failed:', error);
+                }
+            }
+            
+            setupVRControls() {
+                try {
+                    // Check if VR components are available
+                    if (AFRAME.components['movement-controls']) {
+                        this.rig.setAttribute('movement-controls', {
+                            fly: false,
+                            constrainToNavMesh: false
+                        });
+                    }
+                    
+                    // Setup hand controls if available
+                    const leftHand = document.querySelector('#leftHand');
+                    const rightHand = document.querySelector('#rightHand');
+                    
+                    if (AFRAME.components['hand-controls']) {
+                        leftHand.setAttribute('hand-controls', {
+                            hand: 'left',
+                            handModelStyle: 'lowPoly',
+                            color: '#00ffff'
+                        });
+                        
+                        rightHand.setAttribute('hand-controls', {
+                            hand: 'right', 
+                            handModelStyle: 'lowPoly',
+                            color: '#00ffff'
+                        });
+                    }
+                    
+                    // Setup teleport controls if available
+                    if (AFRAME.components['teleport-controls']) {
+                        leftHand.setAttribute('teleport-controls', {
+                            cameraRig: '#rig',
+                            teleportOrigin: '#camera',
+                            button: 'trigger',
+                            curveShootingSpeed: 18,
+                            landingMaxAngle: 60
+                        });
+                    }
+                    
+                    // Setup laser controls if available
+                    if (AFRAME.components['laser-controls']) {
+                        rightHand.setAttribute('laser-controls', {
+                            hand: 'right'
+                        });
+                        
+                        rightHand.setAttribute('raycaster', {
+                            objects: '.clickable',
+                            far: 30
+                        });
+                    }
+                    
+                    vrSupported = true;
+                } catch (error) {
+                    console.warn('VR controls setup failed, using basic controls only:', error);
+                    vrSupported = false;
                 }
             }
             
@@ -241,20 +355,30 @@
             
             setupEventListeners() {
                 // VR controller detection
-                this.camera.addEventListener('enter-vr', () => {
-                    document.querySelector('#leftHand').setAttribute('visible', true);
-                    document.querySelector('#rightHand').setAttribute('visible', true);
-                });
-                
-                this.camera.addEventListener('exit-vr', () => {
-                    document.querySelector('#leftHand').setAttribute('visible', false);
-                    document.querySelector('#rightHand').setAttribute('visible', false);
-                });
+                if (vrSupported) {
+                    this.camera.addEventListener('enter-vr', () => {
+                        document.querySelector('#leftHand').setAttribute('visible', true);
+                        document.querySelector('#rightHand').setAttribute('visible', true);
+                    });
+                    
+                    this.camera.addEventListener('exit-vr', () => {
+                        document.querySelector('#leftHand').setAttribute('visible', false);
+                        document.querySelector('#rightHand').setAttribute('visible', false);
+                    });
+                }
                 
                 // Artifact interaction
                 document.addEventListener('click', (event) => {
                     if (event.target.classList.contains('artifact')) {
                         this.selectArtifact(event.target);
+                    }
+                });
+                
+                // Mouse click for desktop interaction
+                this.camera.addEventListener('click', (event) => {
+                    const intersectedEl = event.detail.intersectedEl;
+                    if (intersectedEl && intersectedEl.classList.contains('artifact')) {
+                        this.selectArtifact(intersectedEl);
                     }
                 });
             }
@@ -425,7 +549,10 @@
         
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            new VRProfileWorld();
+            // Small delay to ensure A-Frame is fully loaded
+            setTimeout(() => {
+                new VRProfileWorld();
+            }, 500);
         });
         
         // Handle VR mode changes
@@ -440,4 +567,3 @@
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
